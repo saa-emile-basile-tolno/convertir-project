@@ -1,6 +1,6 @@
 <script setup>
-import { ref, watch } from 'vue'
-import { devises, taux } from '../data/taux.js'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { devises, taux as tauxFixes } from '../data/taux.js'
 
 // Montant saisi : une chaîne pour faciliter la saisie au clavier
 const montant = ref('0')
@@ -11,6 +11,9 @@ const deviseCible = ref('EUR')
 const resultat = ref('')
 // Affiche le message d'erreur quand le montant vaut 0
 const erreur = ref(false)
+
+// Bonus 2 : taux utilisés (taux fixes par défaut, remplacés si l'API répond)
+const taux = ref({ ...tauxFixes })
 
 // Les 12 touches du clavier numérique (ordre d'affichage de la grille 4 x 3)
 const touches = ['7', '8', '9', '4', '5', '6', '1', '2', '3', 'C', '0', '.']
@@ -55,9 +58,9 @@ function convertir() {
   erreur.value = false
 
   // Étape 1 : montant source → euros
-  const montantEnEuro = valeur / taux[deviseSource.value]
+  const montantEnEuro = valeur / taux.value[deviseSource.value]
   // Étape 2 : euros → devise cible
-  const montantConverti = montantEnEuro * taux[deviseCible.value]
+  const montantConverti = montantEnEuro * taux.value[deviseCible.value]
 
   // Arrondi à 2 décimales
   resultat.value = montantConverti.toFixed(2)
@@ -84,6 +87,55 @@ watch([montant, deviseSource, deviseCible], () => {
     erreur.value = false
   }
 })
+
+// Bonus 2 : récupération des taux réels, avec repli sur les taux fixes
+async function chargerTauxReels() {
+  try {
+    const reponse = await fetch('https://open.er-api.com/v6/latest/EUR')
+    if (!reponse.ok) throw new Error('Réponse invalide')
+    const donnees = await reponse.json()
+
+    // On ne garde que nos 6 devises
+    const nouveauxTaux = {}
+    for (const d of devises) {
+      if (!donnees.rates[d]) throw new Error('Devise manquante : ' + d)
+      nouveauxTaux[d] = donnees.rates[d]
+    }
+    taux.value = nouveauxTaux
+
+    // Si un résultat est déjà affiché, on le recalcule avec les nouveaux taux
+    if (resultat.value !== '') convertir()
+  } catch (e) {
+    // Erreur réseau ou données incomplètes : on garde les taux fixes
+    console.warn('API indisponible, taux fixes utilisés', e)
+  }
+}
+
+// Bonus 3 : saisie au clavier physique de l'ordinateur
+function gererClavier(evenement) {
+  const touche = evenement.key
+
+  if (touche.length === 1 && '0123456789'.includes(touche)) {
+    appuyer(touche)
+  } else if (touche === '.' || touche === ',') {
+    appuyer('.')
+  } else if (touche === 'Escape' || touche === 'Delete') {
+    appuyer('C')
+  } else if (touche === 'Backspace') {
+    // Efface le dernier caractère (revient à '0' si le montant est vide)
+    erreur.value = false
+    montant.value = montant.value.slice(0, -1) || '0'
+  } else if (touche === 'Enter') {
+    convertir()
+  }
+}
+
+onMounted(() => {
+  chargerTauxReels()
+  window.addEventListener('keydown', gererClavier)
+})
+// On retire l'écouteur quand le composant disparaît
+onUnmounted(() => window.removeEventListener('keydown', gererClavier))
 </script>
 
 <template>
